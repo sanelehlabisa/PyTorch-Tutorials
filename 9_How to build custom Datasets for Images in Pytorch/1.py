@@ -43,20 +43,13 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Hyperparameters
 learning_rate = 0.001
-batch_size = 32
-num_epochs = 5
-
-# Transformations
-transform = transforms.Compose([
-    transforms.Grayscale(num_output_channels=3),  # Convert grayscale to 3 channels
-    transforms.Resize((224, 224)),  # Resize to 224x224
-    transforms.ToTensor(),  # Convert to Tensor
-])
+batch_size = 64
+num_epochs = 128
 
 # Load datasets
 dataset = CatAndDogsDataset(csv_file='cats_dogs.csv', root_dir='cats_dogs_resized', transform=transforms.ToTensor())
 
-train_set, test_set = torch.utils.data.random_split(dataset, [20000, 5000])
+train_set, test_set = torch.utils.data.random_split(dataset, [8, 2])
 
 train_loader = DataLoader(dataset=train_set, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(dataset=test_set, batch_size=batch_size, shuffle=True)
