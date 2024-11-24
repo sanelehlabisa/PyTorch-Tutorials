@@ -4,3 +4,7 @@ __pycache__*
 
 dataset/*
 flickr8/*
+
+cat_dogs/*
+
+images/*
