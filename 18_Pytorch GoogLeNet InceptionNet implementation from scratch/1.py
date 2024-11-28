@@ -48,23 +48,19 @@ class GoogLeNet(nn.Module):
         x = self.inception4d(x)
         x = self.inception4e(x)
         x = self.maxpool4(x)
-
-        x = self.inception3d(x)
-        x = self.inception3e(x)
-        x = self.maxpool3(x)
-
         
         x = self.inception5a(x)
         x = self.inception5b(x)
 
         x = self.avgpool(x)
+        x = x.reshape(x.shape[0], -1)
         x = self.dropout(x)
         x = self.fc1(x)
 
         return x
 
 class Inception_block(nn.Module):
-    def __init__(self, in_channels, out_1x1, red_3x3, out_3x3, red_5x5, out_5x5, in_1x1pool):
+    def __init__(self, in_channels, out_1x1, red_3x3, out_3x3, red_5x5, out_5x5, out_1x1pool):
         super(Inception_block, self).__init__()
         self.branch1 = conv_block(in_channels, out_1x1, kernel_size=1)
         self.branch2 = nn.Sequential(
@@ -77,7 +73,7 @@ class Inception_block(nn.Module):
         )
         self.branch4 = nn.Sequential(
             nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
-            conv_block(in_channels, out_1x1, kernel_size=1)
+            conv_block(in_channels, out_1x1pool, kernel_size=1)
         )
 
     def forward(self, x):
