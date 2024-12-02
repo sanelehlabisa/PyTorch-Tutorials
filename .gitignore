@@ -10,3 +10,11 @@ cat_dogs/*
 images/*
 
 dogs_dataset/*
+
+runs/*
+
+*.tar
+
+*.pth
+
+my_checkpoint.pth.tar
