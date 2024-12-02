@@ -4,6 +4,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.models as models
+from torchvision.models import Inception_V3_Weights
+
+
 import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
 import os  # when loading file paths
@@ -142,15 +145,15 @@ class EncoderCNN(nn.Module):
     def __init__(self, embed_size, train_CNN=False):
         super(EncoderCNN, self).__init__()
         self.train_CNN = train_CNN
-        self.inception = models.inception_v3(pretrained=True, aux_logits=True)
+        self.inception = models.inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1)
         self.inception.fc = nn.Linear(self.inception.fc.in_features, embed_size)
         self.relu = nn.ReLU()
-        self.times = []
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, images):
-        features = self.inception(images)
+        features = self.inception(images).logits  # Extract logits
         return self.dropout(self.relu(features))
+
 
 
 class DecoderRNN(nn.Module):
