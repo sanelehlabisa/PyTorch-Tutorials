@@ -17,7 +17,7 @@ from torchtext.data import Field, TabularDataset, BucketIterator
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # python -m spacy download en
-spacy_en = spacy.load("en")
+spacy_en = spacy.load("en_core_web_sm")
 
 
 def tokenize(text):
@@ -82,7 +82,7 @@ hidden_size = 512
 num_layers = 2
 embedding_size = 100
 learning_rate = 0.005
-num_epochs = 10
+num_epochs = 1024
 
 # Initialize network
 model = RNN_LSTM(input_size, embedding_size, hidden_size, num_layers).to(device)
@@ -105,6 +105,8 @@ for epoch in range(num_epochs):
         # forward
         scores = model(data)
         loss = criterion(scores.squeeze(1), targets.type_as(scores))
+
+        print(f"Epoch: {epoch}, Loss: {loss.item()}")
 
         # backward
         optimizer.zero_grad()
