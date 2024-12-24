@@ -6,30 +6,38 @@ from torchtext.data import Field, BucketIterator
 import numpy as np
 import random
 import spacy
+from torchtext.data.metrics import bleu_score
 from torch.utils.tensorboard import SummaryWriter
 
 spacy_eng = spacy.load("en_core_web_sm")
-spacy_ger = spacy.load("de_core_web_sm")
+spacy_ger = spacy.load("de_core_news_sm")
 
-def tokinizer_ger(text):
-    return [tok.text for tok in spacy_ger.tokinizer(text)]
+def tokenizer_ger(text):
+    return [tok.text for tok in spacy_ger.tokenizer(text)]
 
-def tokinizer_eng(text):
+def tokenizer_eng(text):
     return [tok.text for tok in spacy_eng.tokenizer(text)]
 
 german = Field(
-    tokenize=tokinizer_ger,
+    tokenize=tokenizer_ger,
     init_token="<sos>",
     eos_token="eos"
 )
 
 english = Field(
-    tokenize=tokinizer_eng,
+    tokenize=tokenizer_eng,
     init_token="<sos>",
     eos_token="<eos>"
 )
 
-train_data, validation_data, test_data = Multi30k(exts=('.de', '.en'), fields=(german, english))
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
+
+train_data, valid_data, test_data = Multi30k.splits(
+    exts=(".de", ".en"), fields=(german, english), root=".data"
+)
+
 
 german.build_vocab(train_data, max_size=1000, min_freq=2)
 english.build_vocab(train_data, max_size=1000, min_freq=2)
@@ -109,89 +117,190 @@ class Seq2Seq(nn.Module):
 
         return outputs
     
-# Save the model
-def save_checkpoint(state, filename='my_checkpoint.pth.tar'):
+def translate_sentence(model, sentence, german, english, device, max_length=50):
+    # print(sentence)
+
+    # sys.exit()
+
+    # Load german tokenizer
+    spacy_ger = spacy.load("de")
+
+    # Create tokens using spacy and everything in lower case (which is what our vocab is)
+    if type(sentence) == str:
+        tokens = [token.text.lower() for token in spacy_ger(sentence)]
+    else:
+        tokens = [token.lower() for token in sentence]
+
+    # print(tokens)
+
+    # sys.exit()
+    # Add <SOS> and <EOS> in beginning and end respectively
+    tokens.insert(0, german.init_token)
+    tokens.append(german.eos_token)
+
+    # Go through each german token and convert to an index
+    text_to_indices = [german.vocab.stoi[token] for token in tokens]
+
+    # Convert to Tensor
+    sentence_tensor = torch.LongTensor(text_to_indices).unsqueeze(1).to(device)
+
+    # Build encoder hidden, cell state
+    with torch.no_grad():
+        hidden, cell = model.encoder(sentence_tensor)
+
+    outputs = [english.vocab.stoi["<sos>"]]
+
+    for _ in range(max_length):
+        previous_word = torch.LongTensor([outputs[-1]]).to(device)
+
+        with torch.no_grad():
+            output, hidden, cell = model.decoder(previous_word, hidden, cell)
+            best_guess = output.argmax(1).item()
+
+        outputs.append(best_guess)
+
+        # Model predicts it's the end of the sentence
+        if output.argmax(1).item() == english.vocab.stoi["<eos>"]:
+            break
+
+    translated_sentence = [english.vocab.itos[idx] for idx in outputs]
+
+    # remove start token
+    return translated_sentence[1:]
+
+
+def bleu(data, model, german, english, device):
+    targets = []
+    outputs = []
+
+    for example in data:
+        src = vars(example)["src"]
+        trg = vars(example)["trg"]
+
+        prediction = translate_sentence(model, src, german, english, device)
+        prediction = prediction[:-1]  # remove <eos> token
+
+        targets.append([trg])
+        outputs.append(prediction)
+
+    return bleu_score(outputs, targets)
+
+
+def save_checkpoint(state, filename="my_checkpoint.pth.tar"):
     print("=> Saving checkpoint")
     torch.save(state, filename)
 
-# Load the model
-def load_checkpoint(checkpoint):
+
+def load_checkpoint(checkpoint, model, optimizer):
     print("=> Loading checkpoint")
-    model.load_state_dict(checkpoint['state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    model.load_state_dict(checkpoint["state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
 
-# Training Hyperparameters
-num_epochs = 32
+# Training hyperparameters
+num_epochs = 100
 learning_rate = 0.001
-batch_size = 16
+batch_size = 64
 
-# Model Hyperparameters
+# Model hyperparameters
 load_model = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 input_size_encoder = len(german.vocab)
 input_size_decoder = len(english.vocab)
 output_size = len(english.vocab)
-encoder_embedding_size =  300
+encoder_embedding_size = 300
 decoder_embedding_size = 300
-hidden_size = 1024
+hidden_size = 1024  # Needs to be the same for both RNN's
 num_layers = 2
 enc_dropout = 0.5
 dec_dropout = 0.5
 
-# Tensorboard
-writer = SummaryWriter(f'runs/loss_plot')
+# Tensorboard to get nice loss plot
+writer = SummaryWriter(f"runs/loss_plot")
 step = 0
 
-train_iterator, valid_iterator, test_iterator  = BucketIterator(
-    (train_data, validation_data, test_data),
+train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
+    (train_data, valid_data, test_data),
     batch_size=batch_size,
     sort_within_batch=True,
-    sort_key= lambda x: len(x.src),
-    device=device
+    sort_key=lambda x: len(x.src),
+    device=device,
 )
 
 encoder_net = Encoder(
     input_size_encoder, encoder_embedding_size, hidden_size, num_layers, enc_dropout
 ).to(device)
 
-decoder_net = Encoder(
-    input_size_decoder, decoder_embedding_size, hidden_size, output_size, dec_dropout
+decoder_net = Decoder(
+    input_size_decoder,
+    decoder_embedding_size,
+    hidden_size,
+    output_size,
+    num_layers,
+    dec_dropout,
 ).to(device)
 
-model = Seq2Seq(encoder_net, decoder_net)
+model = Seq2Seq(encoder_net, decoder_net).to(device)
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-pad_idx = english.vocab.stoi['<pad>']
+pad_idx = english.vocab.stoi["<pad>"]
 criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
 
 if load_model:
-    load_checkpoint(torch.load("my_checkpoint.pth.ptar"), model, optimizer)
+    load_checkpoint(torch.load("my_checkpoint.pth.tar"), model, optimizer)
 
-sentence = 'ein boot mit anderen mannern wird wird von einem groben pferdespann ans ufer gezogen'
 
-for epoch in num_epochs:
-    print(f"Epoch [{epoch} / {num_epochs}]")
-    checkpoint = {'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict()}
+sentence = "ein boot mit mehreren männern darauf wird von einem großen pferdegespann ans ufer gezogen."
+
+for epoch in range(num_epochs):
+    print(f"[Epoch {epoch} / {num_epochs}]")
+
+    checkpoint = {"state_dict": model.state_dict(), "optimizer": optimizer.state_dict()}
     save_checkpoint(checkpoint)
 
     model.eval()
-    
-    translated_sentence = translated_sentence(model, sentence, german, english, device, max_length=50)
-    print(f"Translated example sentance\n{translated_sentence}")
+
+    translated_sentence = translate_sentence(
+        model, sentence, german, english, device, max_length=50
+    )
+
+    print(f"Translated example sentence: \n {translated_sentence}")
+
+    model.train()
 
     for batch_idx, batch in enumerate(train_iterator):
+        # Get input and targets and get to cuda
         inp_data = batch.src.to(device)
         target = batch.trg.to(device)
 
+        # Forward prop
         output = model(inp_data, target)
-        # output shape: (trg_len, batch_sizem output_dim)
 
+        # Output is of shape (trg_len, batch_size, output_dim) but Cross Entropy Loss
+        # doesn't take input in that form. For example if we have MNIST we want to have
+        # output to be: (N, 10) and targets just (N). Here we can view it in a similar
+        # way that we have output_words * batch_size that we want to send in into
+        # our cost function, so we need to do some reshapin. While we're at it
+        # Let's also remove the start token while we're at it
         output = output[1:].reshape(-1, output.shape[2])
         target = target[1:].reshape(-1)
 
         optimizer.zero_grad()
         loss = criterion(output, target)
 
+        # Back prop
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters())
+        # Clip to avoid exploding gradient issues, makes sure grads are
+        # within a healthy range
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+
+        # Gradient descent step
+        optimizer.step()
+
+        # Plot to tensorboard
+        writer.add_scalar("Training loss", loss, global_step=step)
+        step += 1
+
+
+score = bleu(test_data[1:100], model, german, english, device)
+print(f"Bleu score {score*100:.2f}")
